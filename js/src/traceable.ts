@@ -220,6 +220,7 @@ async function handleRunOutputs<Return>(params: {
   on_end: (runTree?: RunTree) => void;
   postRunPromise?: Promise<void>;
   deferredInputs?: boolean;
+  skipChildPromiseDelay?: boolean;
 }): Promise<void> {
   const {
     runTree,
@@ -228,6 +229,7 @@ async function handleRunOutputs<Return>(params: {
     on_end,
     postRunPromise,
     deferredInputs,
+    skipChildPromiseDelay,
   } = params;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   let outputs: any;
@@ -239,6 +241,7 @@ async function handleRunOutputs<Return>(params: {
   }
 
   const childRunEndPromises =
+    !skipChildPromiseDelay &&
     isRunTree(runTree) &&
     _LC_CHILD_RUN_END_PROMISES_KEY in runTree &&
     Array.isArray(runTree[_LC_CHILD_RUN_END_PROMISES_KEY])
@@ -943,6 +946,7 @@ export function traceable<Func extends (...args: any[]) => any>(
         snapshot: ReturnType<typeof AsyncLocalStorage.snapshot> | undefined
       ) {
         let finished = false;
+        let hasError = false;
         const chunks: unknown[] = [];
         const capturedOtelContext = otel_context.active();
         try {
@@ -967,6 +971,7 @@ export function traceable<Func extends (...args: any[]) => any>(
             yield value;
           }
         } catch (e) {
+          hasError = true;
           await currentRunTree?.end(undefined, String(e));
           throw e;
         } finally {
@@ -984,6 +989,7 @@ export function traceable<Func extends (...args: any[]) => any>(
             on_end,
             postRunPromise,
             deferredInputs,
+            skipChildPromiseDelay: hasError || !finished,
           });
         }
       }
@@ -1130,15 +1136,7 @@ export function traceable<Func extends (...args: any[]) => any>(
               }
             },
             async (error: unknown) => {
-              if (
-                isRunTree(currentRunTree) &&
-                _LC_CHILD_RUN_END_PROMISES_KEY in currentRunTree &&
-                Array.isArray(currentRunTree[_LC_CHILD_RUN_END_PROMISES_KEY])
-              ) {
-                await Promise.all(
-                  currentRunTree[_LC_CHILD_RUN_END_PROMISES_KEY] ?? []
-                );
-              }
+              // Don't wait for child runs on error - fail fast
               await currentRunTree?.end(undefined, String(error));
               await handleEnd({
                 runTree: currentRunTree,
